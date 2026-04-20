@@ -12,6 +12,9 @@ const GalaxyCanvas = () => {
     if (!ctx) return;
 
     let raf: number;
+    let offset = 0;           // current pan offset in px
+    const PAN_SPEED = 0.18;   // px per frame — slow drift
+    const TILE_W_MULT = 3;    // offscreen canvas is 3× viewport width for seamless loop
 
     // ── Types ────────────────────────────────────────────────────────────────
 
@@ -28,187 +31,147 @@ const GalaxyCanvas = () => {
       active: boolean;
     }
 
-    // ── State ─────────────────────────────────────────────────────────────────
+    let stars: Star[]    = [];
+    let shooter: Shooter = { x:0,y:0,vx:0,vy:0,len:0,life:0,maxLife:0,active:false };
+    let nextShot         = 0;
+    let galaxyTile: HTMLCanvasElement | null = null;
 
-    let stars:   Star[]    = [];
-    let shooter: Shooter   = { x:0,y:0,vx:0,vy:0,len:0,life:0,maxLife:0,active:false };
-    let nextShot = 0;          // timestamp for next shooting star
-    let galaxyLayer: HTMLCanvasElement | null = null;
+    // ── Paint the galaxy tile ─────────────────────────────────────────────────
 
-    const STAR_COLS = [
-      "#ffffff","#ffffff","#ffffff","#ffffff",
-      "#ddeeff","#cce0ff","#aaccff",
-      "#fff8e8","#ffeedd",
-    ];
-
-    // ── Build static Milky Way layer ──────────────────────────────────────────
-
-    const buildMilkyWay = (w: number, h: number) => {
+    const paintTile = (tw: number, th: number): HTMLCanvasElement => {
       const off = document.createElement("canvas");
-      off.width = w; off.height = h;
+      off.width = tw; off.height = th;
       const c   = off.getContext("2d")!;
 
-      // The band runs left→right, centred roughly at 55% height,
-      // tilted slightly like the real Milky Way
-      const bandY  = h * 0.52;
-      const tilt   = h * 0.10;   // how much it rises from left to right edge
-
-      const band = (
-        yOff: number, thickness: number,
-        r: number, g: number, b: number, alpha: number
-      ) => {
-        for (let x = 0; x <= w; x += w / 80) {
-          const cy = bandY - tilt * (x / w - 0.5) * 2 + yOff;
-          const grad = c.createRadialGradient(x, cy, 0, x, cy, thickness);
-          grad.addColorStop(0,   `rgba(${r},${g},${b},${alpha})`);
-          grad.addColorStop(0.5, `rgba(${r},${g},${b},${alpha * 0.4})`);
-          grad.addColorStop(1,   "rgba(0,0,0,0)");
-          c.beginPath();
-          c.arc(x, cy, thickness, 0, Math.PI * 2);
-          c.fillStyle = grad;
-          c.fill();
-        }
+      // Helper: radial blob
+      const blob = (x:number, y:number, r:number, col:[number,number,number], alpha:number) => {
+        const g = c.createRadialGradient(x,y,0,x,y,r);
+        g.addColorStop(0,   `rgba(${col[0]},${col[1]},${col[2]},${alpha})`);
+        g.addColorStop(0.45,`rgba(${col[0]},${col[1]},${col[2]},${alpha*0.45})`);
+        g.addColorStop(1,   "rgba(0,0,0,0)");
+        c.beginPath(); c.arc(x,y,r,0,Math.PI*2);
+        c.fillStyle=g; c.fill();
       };
 
-      // Wide outer glow — deep blue
-      band(0,   h * 0.32,  20,  35, 110, 0.18);
-      // Mid layer — blue-purple
-      band(0,   h * 0.20,  40,  30, 130, 0.22);
-      // Inner bright core — blue-white + warm
-      band(0,   h * 0.10,  90, 100, 180, 0.25);
-      // Very bright spine — warm gold/white
-      band(0,   h * 0.045, 230,210, 170, 0.30);
+      // Deep navy base is CSS background-color — canvas is transparent
 
-      // Emission nebulae — pinkish blobs scattered along band
-      const emit = [0.18, 0.38, 0.55, 0.72, 0.88];
-      emit.forEach((fx, i) => {
-        const ex = fx * w;
-        const ey = bandY - tilt * (fx - 0.5) * 2 + (i % 2 === 0 ? -h*0.04 : h*0.03);
-        const er = h * (0.06 + (i % 3) * 0.03);
-        const eg = c.createRadialGradient(ex, ey, 0, ex, ey, er);
-        eg.addColorStop(0,   "rgba(180,80,140,0.22)");
-        eg.addColorStop(0.5, "rgba(120,50,160,0.10)");
-        eg.addColorStop(1,   "rgba(0,0,0,0)");
-        c.beginPath(); c.arc(ex, ey, er, 0, Math.PI*2);
-        c.fillStyle = eg; c.fill();
+      // ── Large background nebula masses (deep blue) ───────────────────────
+      const positions = [
+        [0.10, 0.45], [0.28, 0.30], [0.42, 0.60], [0.55, 0.35],
+        [0.68, 0.55], [0.80, 0.25], [0.92, 0.50], [1.05, 0.40],
+        [1.18, 0.65], [1.30, 0.30], [1.45, 0.50], [1.60, 0.45],
+        [1.75, 0.30], [1.90, 0.60], [2.05, 0.40], [2.20, 0.55],
+        [2.38, 0.35], [2.55, 0.55], [2.72, 0.40], [2.88, 0.60],
+      ];
+      positions.forEach(([fx, fy]) => {
+        blob(fx*tw, fy*th, th*(0.35+Math.abs(Math.sin(fx*7))*0.2), [18,60,160], 0.55);
+        blob(fx*tw, fy*th, th*(0.18+Math.abs(Math.cos(fx*5))*0.1), [30,80,200], 0.45);
       });
 
-      // Blue reflection nebulae
-      const refl = [0.08, 0.30, 0.62, 0.82];
-      refl.forEach((fx, i) => {
-        const rx2 = fx * w;
-        const ry2 = bandY - tilt*(fx-0.5)*2 + (i%2===0 ? h*0.05 : -h*0.06);
-        const rr  = h * (0.05 + (i%2)*0.025);
-        const rg  = c.createRadialGradient(rx2, ry2, 0, rx2, ry2, rr);
-        rg.addColorStop(0,   "rgba(60,120,220,0.18)");
-        rg.addColorStop(0.5, "rgba(40, 80,180,0.08)");
-        rg.addColorStop(1,   "rgba(0,0,0,0)");
-        c.beginPath(); c.arc(rx2, ry2, rr, 0, Math.PI*2);
-        c.fillStyle = rg; c.fill();
+      // ── Bright mid-blue clouds ────────────────────────────────────────────
+      const mids = [
+        [0.15,0.55],[0.32,0.40],[0.50,0.50],[0.65,0.30],[0.78,0.60],
+        [0.95,0.45],[1.10,0.35],[1.25,0.55],[1.40,0.42],[1.58,0.60],
+        [1.72,0.40],[1.88,0.30],[2.02,0.55],[2.18,0.45],[2.35,0.60],
+        [2.50,0.35],[2.65,0.50],[2.82,0.40],[2.95,0.58],
+      ];
+      mids.forEach(([fx,fy]) => {
+        blob(fx*tw, fy*th, th*(0.14+Math.abs(Math.sin(fx*9))*0.08), [50,110,220], 0.40);
       });
 
-      // Dark dust lanes — slightly darker streaks within band for realism
-      c.globalCompositeOperation = "multiply";
-      const dustLanes = [0.25, 0.5, 0.75];
-      dustLanes.forEach(fx => {
-        const dx = fx * w;
-        const dy = bandY - tilt*(fx-0.5)*2;
-        const dg = c.createRadialGradient(dx, dy, 0, dx, dy, h*0.04);
-        dg.addColorStop(0,   "rgba(0,0,10,0.45)");
-        dg.addColorStop(1,   "rgba(0,0,0,0)");
-        c.beginPath(); c.arc(dx, dy, h*0.04, 0, Math.PI*2);
-        c.fillStyle = dg; c.fill();
+      // ── Lighter core patches (near-white blue) ────────────────────────────
+      const bright = [
+        [0.20,0.48],[0.45,0.38],[0.60,0.58],[0.85,0.42],
+        [1.00,0.52],[1.20,0.38],[1.50,0.55],[1.68,0.35],
+        [1.85,0.50],[2.10,0.42],[2.30,0.55],[2.60,0.38],
+        [2.80,0.52],[2.95,0.45],
+      ];
+      bright.forEach(([fx,fy]) => {
+        blob(fx*tw, fy*th, th*(0.06+Math.abs(Math.cos(fx*11))*0.04), [130,190,255], 0.35);
+        blob(fx*tw, fy*th, th*0.025, [220,235,255], 0.40);
       });
-      c.globalCompositeOperation = "source-over";
+
+      // ── Teal-green accents (like the image) ───────────────────────────────
+      const teals = [[0.35,0.25],[0.70,0.65],[1.15,0.25],[1.55,0.65],[2.0,0.30],[2.50,0.65]];
+      teals.forEach(([fx,fy]) => {
+        blob(fx*tw, fy*th, th*0.09, [20,140,140], 0.20);
+        blob(fx*tw, fy*th, th*0.04, [80,200,200], 0.18);
+      });
+
+      // ── White core sparkle regions ────────────────────────────────────────
+      const whites = [[0.22,0.45],[0.62,0.52],[1.08,0.42],[1.52,0.50],[2.05,0.48],[2.55,0.44]];
+      whites.forEach(([fx,fy]) => {
+        blob(fx*tw, fy*th, th*0.05, [240,245,255], 0.22);
+      });
+
+      // ── Dense star field across the entire tile ───────────────────────────
+      const COLS = [
+        "#ffffff","#ffffff","#ffffff","#ddeeff","#cce0ff","#aad4ff","#fff8e8",
+      ];
+      const starCount = Math.floor((tw * th) / 500);
+      for (let i = 0; i < starCount; i++) {
+        const x     = Math.random() * tw;
+        const y     = Math.random() * th;
+        const big   = Math.random() < 0.03;
+        const r     = big ? Math.random()*1.5+0.8 : Math.random()*0.5+0.08;
+        const alpha = big ? Math.random()*0.6+0.4  : Math.random()*0.45+0.15;
+        c.globalAlpha = alpha;
+        c.fillStyle   = COLS[Math.floor(Math.random()*COLS.length)];
+        c.beginPath(); c.arc(x,y,r,0,Math.PI*2); c.fill();
+
+        // Cross on bright stars
+        if (big && r > 1.2) {
+          c.globalAlpha = alpha * 0.25;
+          c.strokeStyle = "#ffffff";
+          c.lineWidth   = 0.4;
+          c.beginPath();
+          c.moveTo(x-r*5,y); c.lineTo(x+r*5,y);
+          c.moveTo(x,y-r*5); c.lineTo(x,y+r*5);
+          c.stroke();
+        }
+      }
+      c.globalAlpha = 1;
 
       return off;
-    };
-
-    // ── Init stars ────────────────────────────────────────────────────────────
-
-    const init = () => {
-      canvas.width  = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
-
-      const w = canvas.width, h = canvas.height;
-      const bandY = h * 0.52;
-      const tilt  = h * 0.10;
-      const total = Math.floor((w * h) / 650);
-
-      stars = Array.from({ length: total }, () => {
-        // Bias stars toward the band
-        let x: number, y: number;
-        if (Math.random() < 0.65) {
-          // near the band
-          x = Math.random() * w;
-          const by = bandY - tilt * (x/w - 0.5) * 2;
-          y = by + (Math.random() - 0.5) * h * 0.38;
-        } else {
-          x = Math.random() * w;
-          y = Math.random() * h;
-        }
-        const bright = Math.random() < 0.03;
-        return {
-          x, y,
-          r:     bright ? Math.random()*1.4+0.7 : Math.random()*0.55+0.08,
-          op:    bright ? Math.random()*0.55+0.40 : Math.random()*0.30+0.08,
-          speed: Math.random()*0.005+0.001,
-          phase: Math.random()*Math.PI*2,
-          color: STAR_COLS[Math.floor(Math.random()*STAR_COLS.length)],
-        };
-      });
-
-      galaxyLayer = buildMilkyWay(w, h);
     };
 
     // ── Shooting star ─────────────────────────────────────────────────────────
 
     const spawnShooter = () => {
       const w = canvas.width, h = canvas.height;
-      // Start anywhere along top or left edge, travel diagonally
-      const fromTop = Math.random() < 0.7;
       shooter = {
-        x:       fromTop ? Math.random() * w : 0,
-        y:       fromTop ? Math.random() * h * 0.4 : Math.random() * h * 0.5,
-        vx:      (3.5 + Math.random() * 4) * (Math.random() < 0.5 ? 1 : -1),
-        vy:      1.5 + Math.random() * 2.5,
-        len:     120 + Math.random() * 160,
-        life:    0,
-        maxLife: 55 + Math.random() * 30,
-        active:  true,
+        x: Math.random() * w * 0.6,
+        y: Math.random() * h * 0.5,
+        vx: 4 + Math.random() * 5,
+        vy: 0.5 + Math.random() * 2,
+        len: 130 + Math.random() * 120,
+        life: 0,
+        maxLife: 50 + Math.random() * 30,
+        active: true,
       };
     };
 
     const drawShooter = () => {
       if (!shooter.active) return;
-      const t   = shooter.life / shooter.maxLife;
-      const op  = t < 0.2 ? t / 0.2 : t > 0.7 ? 1 - (t - 0.7) / 0.3 : 1;
+      const t  = shooter.life / shooter.maxLife;
+      const op = t < 0.15 ? t/0.15 : t > 0.65 ? 1-(t-0.65)/0.35 : 1;
+      const dist = Math.hypot(shooter.vx, shooter.vy);
+      const tx = shooter.x - (shooter.vx/dist) * shooter.len;
+      const ty = shooter.y - (shooter.vy/dist) * shooter.len;
 
-      const tailX = shooter.x - shooter.vx * (shooter.len / Math.hypot(shooter.vx, shooter.vy));
-      const tailY = shooter.y - shooter.vy * (shooter.len / Math.hypot(shooter.vx, shooter.vy));
+      const g = ctx.createLinearGradient(tx,ty,shooter.x,shooter.y);
+      g.addColorStop(0,   "rgba(255,255,255,0)");
+      g.addColorStop(0.5, `rgba(180,210,255,${op*0.35})`);
+      g.addColorStop(1,   `rgba(255,255,255,${op})`);
+      ctx.beginPath(); ctx.moveTo(tx,ty); ctx.lineTo(shooter.x,shooter.y);
+      ctx.strokeStyle=g; ctx.lineWidth=1.6; ctx.globalAlpha=1; ctx.stroke();
 
-      const grad = ctx.createLinearGradient(tailX, tailY, shooter.x, shooter.y);
-      grad.addColorStop(0,   "rgba(255,255,255,0)");
-      grad.addColorStop(0.6, `rgba(200,220,255,${op * 0.4})`);
-      grad.addColorStop(1,   `rgba(255,255,255,${op})`);
-
-      ctx.beginPath();
-      ctx.moveTo(tailX, tailY);
-      ctx.lineTo(shooter.x, shooter.y);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth   = 1.5;
-      ctx.globalAlpha = 1;
-      ctx.stroke();
-
-      // Bright head glow
-      const glow = ctx.createRadialGradient(shooter.x, shooter.y, 0, shooter.x, shooter.y, 6);
-      glow.addColorStop(0,   `rgba(255,255,255,${op * 0.9})`);
-      glow.addColorStop(0.4, `rgba(180,210,255,${op * 0.4})`);
-      glow.addColorStop(1,   "rgba(0,0,0,0)");
-      ctx.beginPath();
-      ctx.arc(shooter.x, shooter.y, 6, 0, Math.PI*2);
-      ctx.fillStyle = glow;
-      ctx.fill();
+      const glow = ctx.createRadialGradient(shooter.x,shooter.y,0,shooter.x,shooter.y,7);
+      glow.addColorStop(0,  `rgba(255,255,255,${op})`);
+      glow.addColorStop(0.3,`rgba(160,200,255,${op*0.5})`);
+      glow.addColorStop(1,  "rgba(0,0,0,0)");
+      ctx.beginPath(); ctx.arc(shooter.x,shooter.y,7,0,Math.PI*2);
+      ctx.fillStyle=glow; ctx.fill();
 
       shooter.x    += shooter.vx;
       shooter.y    += shooter.vy;
@@ -216,57 +179,49 @@ const GalaxyCanvas = () => {
       if (shooter.life >= shooter.maxLife) shooter.active = false;
     };
 
+    // ── Init ──────────────────────────────────────────────────────────────────
+
+    const init = () => {
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+      const tw = canvas.width * TILE_W_MULT;
+      galaxyTile = paintTile(tw, canvas.height);
+      offset = 0;
+    };
+
     // ── Render loop ───────────────────────────────────────────────────────────
 
     const tick = (time: number) => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
 
-      // 1 — Static Milky Way band
-      if (galaxyLayer) ctx.drawImage(galaxyLayer, 0, 0);
+      // Scroll galaxy tile — loop seamlessly
+      if (galaxyTile) {
+        const tileW = galaxyTile.width;
+        // offset increases → apparent motion to the left (stars drift left = camera pans right)
+        const x = -(offset % tileW);
+        ctx.drawImage(galaxyTile, x,       0, tileW, h);
+        ctx.drawImage(galaxyTile, x+tileW, 0, tileW, h); // second copy for seamless wrap
+        offset += PAN_SPEED;
+      }
 
-      // 2 — Stars (very subtle twinkle)
-      stars.forEach(s => {
-        const tw = Math.sin(time * s.speed + s.phase);
-        const op = s.op * (0.84 + 0.16 * tw);
-        ctx.globalAlpha = op;
-        ctx.fillStyle   = s.color;
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
-        ctx.fill();
-
-        // Tiny diffraction cross on brighter stars only
-        if (s.r > 1.0) {
-          ctx.globalAlpha = op * 0.20;
-          ctx.strokeStyle = s.color;
-          ctx.lineWidth   = 0.35;
-          const arm = s.r * 5;
-          ctx.beginPath();
-          ctx.moveTo(s.x-arm, s.y); ctx.lineTo(s.x+arm, s.y);
-          ctx.moveTo(s.x, s.y-arm); ctx.lineTo(s.x, s.y+arm);
-          ctx.stroke();
-        }
-      });
-
-      // 3 — Shooting star
+      // Shooting star
       ctx.globalAlpha = 1;
       if (shooter.active) {
         drawShooter();
       } else if (time >= nextShot) {
         spawnShooter();
-        nextShot = time + 8000 + Math.random() * 14000; // 8–22 s between shots
+        nextShot = time + 9000 + Math.random() * 13000;
       }
 
       ctx.globalAlpha = 1;
       raf = requestAnimationFrame(tick);
     };
 
-    const ro = new ResizeObserver(() => {
-      init();
-    });
+    const ro = new ResizeObserver(init);
     ro.observe(canvas);
     init();
-    // Schedule first shooting star 3–7s in
-    nextShot = performance.now() + 3000 + Math.random() * 4000;
+    nextShot = performance.now() + 4000 + Math.random() * 5000;
     raf = requestAnimationFrame(tick);
 
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
@@ -277,13 +232,16 @@ const GalaxyCanvas = () => {
 
 export const Hero = () => {
   return (
-    <section className="relative w-full min-h-screen overflow-hidden" style={{ background: "#02030e" }}>
+    <section
+      className="relative w-full min-h-screen overflow-hidden"
+      style={{ background: "#02040f" }}
+    >
       <GalaxyCanvas />
 
-      {/* Edge vignette */}
+      {/* Vignette */}
       <div
         className="pointer-events-none absolute inset-0"
-        style={{ background: "radial-gradient(ellipse 120% 100% at 50% 50%, transparent 35%, rgba(1,2,10,0.70) 100%)" }}
+        style={{ background: "radial-gradient(ellipse 130% 100% at 50% 50%, transparent 30%, rgba(1,2,12,0.60) 100%)" }}
       />
 
       {/* Content */}
