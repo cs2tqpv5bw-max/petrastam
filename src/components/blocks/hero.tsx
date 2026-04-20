@@ -3,16 +3,7 @@ import { Button } from "@/components/ui/button";
 
 export const Hero = () => {
   return (
-    <section className="relative w-full min-h-screen overflow-hidden">
-      {/* Full-bleed background image */}
-      <img
-        src="/hero.webp"
-        alt="Petra Stam hero"
-        className="absolute inset-0 h-full w-full object-cover object-center"
-      />
-
-      {/* Dark overlay for text readability */}
-      <div className="absolute inset-0 bg-black/40" />
+    <section className="relative w-full min-h-screen overflow-hidden bg-gradient-to-b from-[#1a1240] via-[#2e1f6b] to-[#1a1240]">
 
       {/* Content — centered, padded to sit below nav */}
       <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 pt-24 pb-16 text-center text-white">
