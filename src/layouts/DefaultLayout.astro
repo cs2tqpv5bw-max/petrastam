@@ -13,7 +13,7 @@ const { title, description } = Astro.props;
     <body class={`h-screen antialiased`}
     >
         <Navbar client:only='react' />
-        <main><slot /></main>
+        <main class="pt-24"><slot /></main>
         <Footer />
     </body>
 </html>
