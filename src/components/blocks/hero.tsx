@@ -2,24 +2,6 @@ import { useEffect, useRef } from "react";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Star {
-  x: number; y: number; r: number;
-  baseOpacity: number; speed: number; phase: number;
-  color: string;
-}
-
-interface Symbol {
-  x: number; y: number; size: number;
-  rotation: number; rotSpeed: number;
-  opacity: number; targetOpacity: number; fadeSpeed: number;
-  type: "triangle" | "hexagon" | "ring" | "cross" | "diamond";
-  color: string;
-}
-
-// ─── Canvas component ─────────────────────────────────────────────────────────
-
 const GalaxyCanvas = () => {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -30,199 +12,215 @@ const GalaxyCanvas = () => {
     if (!ctx) return;
 
     let raf: number;
-    let stars: Star[] = [];
+
+    interface Star {
+      x: number; y: number; r: number;
+      opacity: number; twinkleSpeed: number; phase: number;
+      color: string;
+    }
+
+    interface Symbol {
+      x: number; y: number; size: number;
+      rotation: number; rotSpeed: number;
+      opacity: number; target: number; fadeSpeed: number;
+      type: "triangle" | "hexagon" | "ring" | "diamond";
+    }
+
+    let stars: Star[]   = [];
     let symbols: Symbol[] = [];
 
-    const STAR_COLORS = ["#ffffff", "#e8e0ff", "#d4c5ff", "#fff5cc", "#c5d9ff"];
-    const SYM_COLORS  = [
-      "rgba(190,160,255,",
-      "rgba(210,190,255,",
-      "rgba(255,220,180,",
-      "rgba(160,210,255,",
+    // Real galaxy star colors — mostly blue-white, some warm
+    const STAR_COLORS = [
+      "#ffffff", "#ffffff", "#ffffff",   // majority pure white
+      "#ddeeff", "#cce0ff",              // blue-white (hot stars)
+      "#fff8e8", "#ffeedd",              // warm/yellow (sun-like)
+      "#aaccff",                          // blue (young stars)
     ];
-    const SYM_TYPES: Symbol["type"][] = ["triangle","hexagon","ring","cross","diamond"];
-
-    // ── Setup ─────────────────────────────────────────────────────────────────
 
     const init = () => {
       canvas.width  = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
 
-      // Stars: roughly 1 per 2 500 px²
-      const n = Math.floor((canvas.width * canvas.height) / 2500);
-      stars = Array.from({ length: n }, () => ({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        r: Math.random() * 1.6 + 0.2,
-        baseOpacity: Math.random() * 0.65 + 0.25,
-        speed: Math.random() * 0.018 + 0.004,
-        phase: Math.random() * Math.PI * 2,
-        color: STAR_COLORS[Math.floor(Math.random() * STAR_COLORS.length)],
-      }));
-
-      // Light-language symbols: sparse, spread over canvas
-      symbols = Array.from({ length: 18 }, () => {
-        const base = Math.random() * 0.12;
+      // Dense but tiny star field — real galaxy has thousands
+      const count = Math.floor((canvas.width * canvas.height) / 800);
+      stars = Array.from({ length: count }, () => {
+        const isBright = Math.random() < 0.04; // 4% slightly brighter
         return {
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          size: Math.random() * 50 + 18,
-          rotation: Math.random() * Math.PI * 2,
-          rotSpeed: (Math.random() - 0.5) * 0.0015,
-          opacity: 0,
-          targetOpacity: base,
-          fadeSpeed: Math.random() * 0.0015 + 0.0005,
-          type: SYM_TYPES[Math.floor(Math.random() * SYM_TYPES.length)],
-          color: SYM_COLORS[Math.floor(Math.random() * SYM_COLORS.length)],
+          x:            Math.random() * canvas.width,
+          y:            Math.random() * canvas.height,
+          r:            isBright ? Math.random() * 1.2 + 0.6 : Math.random() * 0.6 + 0.1,
+          opacity:      isBright ? Math.random() * 0.5 + 0.4  : Math.random() * 0.35 + 0.1,
+          twinkleSpeed: Math.random() * 0.006 + 0.001, // very slow
+          phase:        Math.random() * Math.PI * 2,
+          color:        STAR_COLORS[Math.floor(Math.random() * STAR_COLORS.length)],
         };
       });
+
+      // Sparse light language — very faint, slow
+      symbols = Array.from({ length: 8 }, () => ({
+        x:         Math.random() * canvas.width,
+        y:         Math.random() * canvas.height,
+        size:      Math.random() * 35 + 15,
+        rotation:  Math.random() * Math.PI * 2,
+        rotSpeed:  (Math.random() - 0.5) * 0.0008,
+        opacity:   0,
+        target:    Math.random() * 0.055,
+        fadeSpeed: Math.random() * 0.001 + 0.0003,
+        type:      (["triangle","hexagon","ring","diamond"] as const)[
+                     Math.floor(Math.random() * 4)
+                   ],
+      }));
     };
 
-    // ── Draw helpers ──────────────────────────────────────────────────────────
+    // ── Galaxy cloud layers (painted once into offscreen, reused each frame)
+    const paintGalaxy = (w: number, h: number): HTMLCanvasElement => {
+      const off = document.createElement("canvas");
+      off.width  = w;
+      off.height = h;
+      const c = off.getContext("2d")!;
 
-    const drawNebulaLayer = (time: number) => {
-      // Slow-drifting ambient glow blobs
-      const blobs = [
-        { x: 0.25, y: 0.35, r: 0.38, c: "rgba(82,40,150," },
-        { x: 0.72, y: 0.55, r: 0.30, c: "rgba(40,60,160," },
-        { x: 0.50, y: 0.80, r: 0.25, c: "rgba(100,30,120," },
-      ];
-      blobs.forEach(({ x, y, r, c }, i) => {
-        const drift = Math.sin(time * 0.00015 + i) * 20;
-        const cx = x * canvas.width  + drift;
-        const cy = y * canvas.height + drift * 0.5;
-        const rx = r * Math.min(canvas.width, canvas.height);
-        const g  = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx);
-        g.addColorStop(0,   c + "0.18)");
-        g.addColorStop(0.5, c + "0.07)");
-        g.addColorStop(1,   c + "0)");
-        ctx.beginPath();
-        ctx.arc(cx, cy, rx, 0, Math.PI * 2);
-        ctx.fillStyle = g;
-        ctx.globalAlpha = 1;
-        ctx.fill();
-      });
+      // Central core — warm golden nucleus
+      const cx = w * 0.5, cy = h * 0.48;
+      const coreR = Math.min(w, h) * 0.12;
+      const core = c.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+      core.addColorStop(0,    "rgba(255,230,160,0.55)");
+      core.addColorStop(0.15, "rgba(220,180,100,0.30)");
+      core.addColorStop(0.4,  "rgba(150,110,200,0.15)");
+      core.addColorStop(1,    "rgba(0,0,0,0)");
+      c.beginPath();
+      c.arc(cx, cy, coreR, 0, Math.PI * 2);
+      c.fillStyle = core;
+      c.fill();
+
+      // Galaxy disc — wide, tilted ellipse, blue-purple
+      const disc = (
+        ax: number, ay: number, rx: number, ry: number,
+        angle: number, color0: string, color1: string
+      ) => {
+        c.save();
+        c.translate(ax, ay);
+        c.rotate(angle);
+        c.scale(1, ry / rx);
+        const g = c.createRadialGradient(0, 0, 0, 0, 0, rx);
+        g.addColorStop(0,    color0);
+        g.addColorStop(0.45, color1);
+        g.addColorStop(1,    "rgba(0,0,0,0)");
+        c.beginPath();
+        c.arc(0, 0, rx, 0, Math.PI * 2);
+        c.fillStyle = g;
+        c.fill();
+        c.restore();
+      };
+
+      // Main disc
+      disc(cx, cy,
+        Math.min(w,h)*0.55, Math.min(w,h)*0.22,
+        0.35,
+        "rgba(80,60,160,0.18)", "rgba(30,20,80,0.08)"
+      );
+      // Secondary arm offset
+      disc(cx + w*0.06, cy - h*0.04,
+        Math.min(w,h)*0.38, Math.min(w,h)*0.13,
+        -0.5,
+        "rgba(60,90,180,0.13)", "rgba(10,20,70,0.05)"
+      );
+
+      // Nebula dust clouds — several soft blobs
+      const blob = (
+        bx: number, by: number, br: number,
+        r: number, g: number, b: number, a: number
+      ) => {
+        const grad = c.createRadialGradient(bx, by, 0, bx, by, br);
+        grad.addColorStop(0,   `rgba(${r},${g},${b},${a})`);
+        grad.addColorStop(0.5, `rgba(${r},${g},${b},${a*0.4})`);
+        grad.addColorStop(1,   "rgba(0,0,0,0)");
+        c.beginPath();
+        c.arc(bx, by, br, 0, Math.PI * 2);
+        c.fillStyle = grad;
+        c.fill();
+      };
+
+      blob(cx*0.6,  cy*0.7,  Math.min(w,h)*0.28,  30, 50,130, 0.12);  // blue left
+      blob(cx*1.4,  cy*1.2,  Math.min(w,h)*0.22,  60, 30,120, 0.10);  // purple right
+      blob(cx*0.85, cy*1.35, Math.min(w,h)*0.18,  20, 40,100, 0.08);  // deep blue low
+      blob(cx*1.15, cy*0.65, Math.min(w,h)*0.16,  80, 50,150, 0.09);  // violet high
+      blob(cx,      cy,      Math.min(w,h)*0.08,  200,160, 80, 0.20); // warm inner halo
+
+      return off;
     };
 
-    const drawStar = (s: Star, time: number) => {
-      const tw = Math.sin(time * s.speed + s.phase);
-      const op = s.baseOpacity * (0.55 + 0.45 * tw);
-      ctx.globalAlpha = op;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fillStyle = s.color;
-      ctx.fill();
-      // Halo on bigger stars
-      if (s.r > 1.1) {
-        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 5);
-        g.addColorStop(0,   "rgba(255,255,255,0.12)");
-        g.addColorStop(1,   "rgba(255,255,255,0)");
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r * 5, 0, Math.PI * 2);
-        ctx.fillStyle = g;
-        ctx.globalAlpha = op * 0.5;
-        ctx.fill();
-      }
-    };
-
-    const polygon = (sides: number, size: number) => {
-      ctx.beginPath();
-      for (let i = 0; i < sides; i++) {
-        const a = (i / sides) * Math.PI * 2 - Math.PI / 2;
-        i === 0 ? ctx.moveTo(Math.cos(a) * size, Math.sin(a) * size)
-                : ctx.lineTo(Math.cos(a) * size, Math.sin(a) * size);
-      }
-      ctx.closePath();
-    };
+    let galaxyLayer: HTMLCanvasElement | null = null;
 
     const drawSymbol = (s: Symbol) => {
       if (s.opacity < 0.001) return;
       ctx.save();
       ctx.translate(s.x, s.y);
       ctx.rotate(s.rotation);
-      ctx.strokeStyle = s.color + s.opacity + ")";
-      ctx.lineWidth   = 0.8;
+      ctx.strokeStyle = `rgba(180,160,255,${s.opacity})`;
+      ctx.lineWidth   = 0.6;
       ctx.globalAlpha = 1;
 
-      switch (s.type) {
-        case "triangle":
-          polygon(3, s.size);
-          ctx.stroke();
-          // inner triangle inverted
-          ctx.rotate(Math.PI);
-          polygon(3, s.size * 0.55);
-          ctx.stroke();
-          break;
-        case "hexagon":
-          polygon(6, s.size);
-          ctx.stroke();
-          polygon(6, s.size * 0.5);
-          ctx.stroke();
-          break;
-        case "ring":
-          ctx.beginPath();
-          ctx.arc(0, 0, s.size,      0, Math.PI * 2);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(0, 0, s.size * 0.6, 0, Math.PI * 2);
-          ctx.stroke();
-          // four dot markers
-          for (let i = 0; i < 4; i++) {
-            const a = (i / 4) * Math.PI * 2;
-            ctx.beginPath();
-            ctx.arc(Math.cos(a) * s.size, Math.sin(a) * s.size, 2, 0, Math.PI * 2);
-            ctx.fillStyle = s.color + s.opacity + ")";
-            ctx.fill();
-          }
-          break;
-        case "cross":
-          ctx.beginPath();
-          ctx.moveTo(-s.size, 0); ctx.lineTo(s.size, 0);
-          ctx.moveTo(0, -s.size); ctx.lineTo(0, s.size);
-          ctx.stroke();
-          // diagonal arms thinner
-          ctx.lineWidth = 0.4;
-          ctx.beginPath();
-          ctx.moveTo(-s.size * 0.7, -s.size * 0.7); ctx.lineTo(s.size * 0.7, s.size * 0.7);
-          ctx.moveTo( s.size * 0.7, -s.size * 0.7); ctx.lineTo(-s.size * 0.7, s.size * 0.7);
-          ctx.stroke();
-          break;
-        case "diamond":
-          ctx.beginPath();
-          ctx.moveTo(0, -s.size);
-          ctx.lineTo(s.size * 0.55, 0);
-          ctx.lineTo(0,  s.size);
-          ctx.lineTo(-s.size * 0.55, 0);
-          ctx.closePath();
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(0, 0, s.size * 0.2, 0, Math.PI * 2);
-          ctx.stroke();
-          break;
+      const p = (sides: number, r: number) => {
+        ctx.beginPath();
+        for (let i = 0; i < sides; i++) {
+          const a = (i / sides) * Math.PI * 2 - Math.PI / 2;
+          i === 0 ? ctx.moveTo(Math.cos(a)*r, Math.sin(a)*r)
+                  : ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      };
+
+      if (s.type === "triangle") { p(3, s.size); ctx.rotate(Math.PI); p(3, s.size*0.55); }
+      if (s.type === "hexagon")  { p(6, s.size); p(6, s.size*0.5); }
+      if (s.type === "ring") {
+        ctx.beginPath(); ctx.arc(0,0,s.size,0,Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0,0,s.size*0.55,0,Math.PI*2); ctx.stroke();
+      }
+      if (s.type === "diamond") {
+        ctx.beginPath();
+        ctx.moveTo(0,-s.size); ctx.lineTo(s.size*0.5,0);
+        ctx.lineTo(0,s.size);  ctx.lineTo(-s.size*0.5,0);
+        ctx.closePath(); ctx.stroke();
       }
       ctx.restore();
     };
 
-    // ── Animation loop ────────────────────────────────────────────────────────
-
     const tick = (time: number) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 1. nebula glow
-      drawNebulaLayer(time);
+      // Galaxy cloud (static offscreen layer)
+      if (galaxyLayer) ctx.drawImage(galaxyLayer, 0, 0);
 
-      // 2. stars
-      ctx.globalAlpha = 1;
-      stars.forEach(s => drawStar(s, time));
+      // Stars — minimal twinkle
+      stars.forEach(s => {
+        const tw  = Math.sin(time * s.twinkleSpeed + s.phase);
+        const op  = s.opacity * (0.82 + 0.18 * tw); // tiny variation
+        ctx.globalAlpha = op;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = s.color;
+        ctx.fill();
 
-      // 3. light language symbols — fade in/out slowly
+        // Subtle cross spike only on brightest stars
+        if (s.r > 1.1) {
+          ctx.globalAlpha = op * 0.25;
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth   = 0.4;
+          ctx.beginPath();
+          ctx.moveTo(s.x - s.r*4, s.y); ctx.lineTo(s.x + s.r*4, s.y);
+          ctx.moveTo(s.x, s.y - s.r*4); ctx.lineTo(s.x, s.y + s.r*4);
+          ctx.stroke();
+        }
+      });
+
+      // Light language — barely visible
       symbols.forEach(s => {
-        // drift opacity toward target
-        if (Math.abs(s.opacity - s.targetOpacity) < s.fadeSpeed) {
-          // reached target — pick a new one
-          s.targetOpacity = Math.random() < 0.5 ? Math.random() * 0.12 : 0;
+        const diff = s.target - s.opacity;
+        if (Math.abs(diff) < s.fadeSpeed) {
+          s.target = Math.random() < 0.4 ? Math.random() * 0.055 : 0;
         } else {
-          s.opacity += s.opacity < s.targetOpacity ? s.fadeSpeed : -s.fadeSpeed;
+          s.opacity += diff > 0 ? s.fadeSpeed : -s.fadeSpeed;
         }
         s.rotation += s.rotSpeed;
         drawSymbol(s);
@@ -232,61 +230,51 @@ const GalaxyCanvas = () => {
       raf = requestAnimationFrame(tick);
     };
 
-    const ro = new ResizeObserver(() => { init(); });
+    const ro = new ResizeObserver(() => {
+      init();
+      galaxyLayer = paintGalaxy(canvas.width, canvas.height);
+    });
     ro.observe(canvas);
     init();
+    galaxyLayer = paintGalaxy(canvas.width, canvas.height);
     raf = requestAnimationFrame(tick);
 
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, []);
 
-  return (
-    <canvas
-      ref={ref}
-      className="absolute inset-0 h-full w-full"
-      style={{ display: "block" }}
-    />
-  );
+  return <canvas ref={ref} className="absolute inset-0 h-full w-full block" />;
 };
-
-// ─── Hero ─────────────────────────────────────────────────────────────────────
 
 export const Hero = () => {
   return (
-    <section className="relative w-full min-h-screen overflow-hidden bg-[#0d0820]">
+    <section className="relative w-full min-h-screen overflow-hidden" style={{ background: "#03050f" }}>
       <GalaxyCanvas />
 
-      {/* Vignette */}
-      <div className="pointer-events-none absolute inset-0 bg-radial-[ellipse_at_center] from-transparent via-transparent to-black/50" />
+      {/* Soft vignette */}
+      <div className="pointer-events-none absolute inset-0"
+        style={{ background: "radial-gradient(ellipse at center, transparent 40%, rgba(2,3,12,0.65) 100%)" }}
+      />
 
       {/* Content */}
       <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 pt-24 pb-16 text-center text-white">
         <h1 className="max-w-4xl text-4xl font-bold tracking-tight drop-shadow-lg md:text-5xl lg:text-6xl xl:text-7xl">
           Zelfbewustzijn, eigenheid en vrijheid
         </h1>
-        <p className="mt-6 max-w-2xl text-lg text-white/80 drop-shadow md:text-xl">
+        <p className="mt-6 max-w-2xl text-lg text-white/75 drop-shadow md:text-xl">
           Boeken · Kaarten · Cursussen · Workshops · Consulten
         </p>
         <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-          <Button
-            size="lg"
+          <Button size="lg"
             className="rounded-xl bg-primary px-8 text-primary-foreground shadow-lg hover:bg-primary/90"
             asChild
           >
             <a href="/shop">Webshop</a>
           </Button>
-          <Button
-            size="lg"
-            variant="outline"
-            className="rounded-xl border-white/30 bg-white/10 px-8 text-white backdrop-blur-sm hover:bg-white/20"
+          <Button size="lg" variant="outline"
+            className="rounded-xl border-white/25 bg-white/8 px-8 text-white backdrop-blur-sm hover:bg-white/15"
             asChild
           >
-            <a href="/about">
-              Over Petra <ArrowRight className="ml-1 size-4" />
-            </a>
+            <a href="/about">Over Petra <ArrowRight className="ml-1 size-4" /></a>
           </Button>
         </div>
       </div>
