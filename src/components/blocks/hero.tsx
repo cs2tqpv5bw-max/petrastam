@@ -20,16 +20,15 @@ const GalaxyCanvas = () => {
     // ── Types ─────────────────────────────────────────────────────────────────
 
     interface Blob {
-      fx: number; fy: number; fr: number;
+      fx: number;          // fractional x in tile (0–TILE_W)
+      fy: number;          // fractional y (0–1)
+      fr: number;          // fractional radius (relative to tile height)
       col: [number,number,number];
       baseAlpha: number;
-      phase: number; speed: number;
-      dim: 0.10 | 0.15;
-      isAnchor: boolean;
-      // cloud shape
-      aspect: number;      // horizontal stretch (wider = more cloud-like)
-      rot: number;         // tilt in radians
-      parts: Array<{ dx: number; dy: number; rs: number }>; // sub-ellipse offsets
+      phase: number;       // sine phase for opacity flicker
+      speed: number;       // how fast it oscillates
+      dim: 0.10 | 0.15;   // how much it can drop below baseline (never above)
+      isAnchor: boolean;   // true for major blobs that own a star cluster
     }
 
     interface StarCluster {
@@ -52,21 +51,12 @@ const GalaxyCanvas = () => {
     const makeBlobs = (): Blob[] => {
       const list: Blob[] = [];
       const push = (fx:number, fy:number, fr:number, col:[number,number,number], a:number, anchor = false) => {
-        const spread  = 1.0 + Math.random() * 0.40;
-        const nParts  = 2 + Math.floor(Math.random() * 4); // 2–5 sub-ellipses
-        list.push({
-          fx, fy, fr: fr * spread, col, baseAlpha: a * 0.90,
+        const spread = 1.0 + Math.random() * 0.40; // randomly 0–40% larger
+        list.push({ fx, fy, fr: fr * spread, col, baseAlpha: a * 0.90,
           phase:    Math.random() * Math.PI * 2,
           speed:    0.0004 + Math.random() * 0.0006,
-          dim:      Math.random() < 0.5 ? 0.10 : 0.15,
+          dim:      Math.random() < 0.5 ? 0.10 : 0.15,   // randomly either −10% or −15%
           isAnchor: anchor,
-          aspect:   1.8 + Math.random() * 2.2,            // 1.8–4.0 wide
-          rot:      (Math.random() - 0.5) * 0.55,          // ±~31°
-          parts:    Array.from({ length: nParts }, () => ({
-            dx: (Math.random() - 0.5) * 0.7,              // offset as fraction of r
-            dy: (Math.random() - 0.5) * 0.35,
-            rs: 0.45 + Math.random() * 0.55,              // sub-radius scale
-          })),
         });
       };
 
@@ -182,49 +172,46 @@ const GalaxyCanvas = () => {
       return off;
     };
 
-    // ── Draw a single cloud-shaped blob ──────────────────────────────────────
+    // ── Draw a single blob dynamically ────────────────────────────────────────
 
     const drawBlob = (b: Blob, tw: number, th: number, drawX: number, time: number) => {
-      const wx = b.fx * (tw / TILE_W);
+      // World position → screen position
+      const wx = b.fx * (tw / TILE_W);       // blob's x in tile pixels
       const wy = b.fy * th;
+      const sx = wx + drawX;                  // screen x (first copy)
       const r  = b.fr * th;
 
-      const draw = (screenX: number) => {
-        if (screenX + r * b.aspect < 0 || screenX - r * b.aspect > canvas.width) return;
+      // Skip if entirely off screen (both copies)
+      const copy2X = sx + tw / TILE_W * TILE_W; // not needed, handled by drawing twice
 
-        const osc    = 1.0 - b.dim * (0.5 + 0.5 * Math.sin(time * b.speed + b.phase));
-        const fadeIn = Math.min(1, (screenX + r * b.aspect) / FADE_W);
-        const alpha  = b.baseAlpha * osc * fadeIn;
+      const draw = (screenX: number) => {
+        if (screenX + r < 0 || screenX - r > canvas.width) return;
+
+        // Opacity: baseline max, drops by dim (10% or 15%) — never exceeds baseAlpha
+        // factor oscillates between (1 − dim) and 1.0
+        const osc  = 1.0 - b.dim * (0.5 + 0.5 * Math.sin(time * b.speed + b.phase));
+
+        // Left-edge fade-in: blob fades in over FADE_W px as it enters from left
+        const edgeDist = screenX + r;             // dist of right edge from screen left
+        const fadeIn   = Math.min(1, edgeDist / FADE_W);
+
+        const alpha = b.baseAlpha * osc * fadeIn;
         if (alpha < 0.005) return;
 
-        // Draw each sub-ellipse that makes up this cloud
-        b.parts.forEach(part => {
-          const px = screenX + part.dx * r;
-          const py = wy      + part.dy * r;
-          const pr = r * part.rs;
-
-          ctx.save();
-          ctx.translate(px, py);
-          ctx.rotate(b.rot);
-          ctx.scale(b.aspect, 1);      // stretch into ellipse
-
-          // Radial gradient in ellipse-local space
-          const g = ctx.createRadialGradient(0, 0, 0, 0, 0, pr);
-          g.addColorStop(0,    `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha})`);
-          g.addColorStop(0.5,  `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha * 0.5})`);
-          g.addColorStop(1,    "rgba(0,0,0,0)");
-
-          ctx.beginPath();
-          ctx.arc(0, 0, pr, 0, Math.PI * 2);
-          ctx.fillStyle   = g;
-          ctx.globalAlpha = 1;
-          ctx.fill();
-          ctx.restore();
-        });
+        const g = ctx.createRadialGradient(screenX,wy,0, screenX,wy,r);
+        g.addColorStop(0,    `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha})`);
+        g.addColorStop(0.45, `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha*0.45})`);
+        g.addColorStop(1,    "rgba(0,0,0,0)");
+        ctx.beginPath();
+        ctx.arc(screenX, wy, r, 0, Math.PI*2);
+        ctx.fillStyle = g;
+        ctx.globalAlpha = 1;
+        ctx.fill();
       };
 
-      draw(wx + drawX);
-      draw(wx + drawX + tw);
+      // Draw two copies for seamless tile wrap
+      draw(sx);
+      draw(sx + tw);          // second copy offset by full tile width
     };
 
     // ── Star clusters (dynamic density tied to anchor blobs) ──────────────────
