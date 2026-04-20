@@ -52,7 +52,7 @@ const GalaxyCanvas = () => {
       const list: Blob[] = [];
       const push = (fx:number, fy:number, fr:number, col:[number,number,number], a:number, anchor = false) => {
         const spread = 1.0 + Math.random() * 0.40; // randomly 0–40% larger
-        list.push({ fx, fy, fr: fr * spread, col, baseAlpha: a,
+        list.push({ fx, fy, fr: fr * spread, col, baseAlpha: a * 0.90,
           phase:    Math.random() * Math.PI * 2,
           speed:    0.0004 + Math.random() * 0.0006,
           dim:      Math.random() < 0.5 ? 0.10 : 0.15,   // randomly either −10% or −15%
