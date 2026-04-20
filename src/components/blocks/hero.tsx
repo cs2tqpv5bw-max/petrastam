@@ -104,6 +104,36 @@ const GalaxyCanvas = () => {
         push(fx,fy, 0.07, [160,60,180], 0.20);
       });
 
+      // ── Transitional blends — indigo between blue & purple regions ───────
+      // These sit in-between existing blobs and create natural colour mixing
+      [[0.05,0.38],[0.20,0.55],[0.36,0.28],[0.50,0.48],[0.62,0.68],
+       [0.76,0.38],[0.88,0.52],[1.00,0.35],[1.14,0.58],[1.26,0.42],
+       [1.38,0.62],[1.52,0.38],[1.64,0.55],[1.78,0.45],[1.92,0.32],
+       [2.08,0.60],[2.24,0.42],[2.40,0.55],[2.58,0.32],[2.74,0.50],
+       [2.88,0.38],[2.98,0.62],
+      ].forEach(([fx,fy]) => {
+        push(fx,fy, 0.28+Math.abs(Math.sin(fx*11))*0.15, [45,20,140],  0.38); // indigo
+        push(fx,fy, 0.20+Math.abs(Math.cos(fx*7))*0.10,  [25,45,130],  0.30); // blue-indigo
+      });
+
+      // ── Deep midnight — very dark navy pools that anchor the dark areas ───
+      [[0.12,0.52],[0.38,0.42],[0.60,0.28],[0.82,0.58],[1.08,0.46],
+       [1.32,0.32],[1.55,0.60],[1.80,0.40],[2.05,0.55],[2.30,0.38],
+       [2.55,0.50],[2.78,0.35],[2.92,0.55],
+      ].forEach(([fx,fy]) => {
+        push(fx,fy, 0.32+Math.abs(Math.sin(fx*5))*0.18, [8,12,55],   0.55); // near-black navy
+        push(fx,fy, 0.20+Math.abs(Math.cos(fx*9))*0.10, [15,10,75],  0.42); // dark violet-navy
+      });
+
+      // ── Blue-purple crossfade — sits where blue and purple overlap ────────
+      [[0.22,0.42],[0.45,0.58],[0.68,0.32],[0.92,0.55],[1.18,0.38],
+       [1.42,0.62],[1.65,0.32],[1.88,0.55],[2.15,0.42],[2.42,0.60],
+       [2.68,0.35],[2.90,0.48],
+      ].forEach(([fx,fy]) => {
+        push(fx,fy, 0.24+Math.abs(Math.sin(fx*8))*0.12, [55,30,175], 0.32); // blue-violet
+        push(fx,fy, 0.16+Math.abs(Math.cos(fx*6))*0.08, [35,55,160], 0.28); // violet-blue
+      });
+
       // Teal accents
       [[0.35,0.25],[0.70,0.65],[1.15,0.25],[1.55,0.65],[2.0,0.30],[2.50,0.65],
       ].forEach(([fx,fy]) => {
