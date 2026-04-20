@@ -51,8 +51,9 @@ const GalaxyCanvas = () => {
     const makeBlobs = (): Blob[] => {
       const list: Blob[] = [];
       const push = (fx:number, fy:number, fr:number, col:[number,number,number], a:number, anchor = false) => {
-        const spread = 1.0 + Math.random() * 0.40; // randomly 0–40% larger
-        list.push({ fx, fy, fr: fr * spread, col, baseAlpha: a * 0.90,
+        const spread = 1.0 + Math.random() * 0.40;
+        // Scale up 2.2× so blobs are large enough to overlap and merge into smooth colour fields
+        list.push({ fx, fy, fr: fr * spread * 2.2, col, baseAlpha: a * 0.90,
           phase:    Math.random() * Math.PI * 2,
           speed:    0.0004 + Math.random() * 0.0006,
           dim:      Math.random() < 0.5 ? 0.10 : 0.15,   // randomly either −10% or −15%
@@ -132,12 +133,6 @@ const GalaxyCanvas = () => {
         push(fx,fy, 0.08, [160,60,180], 0.22);
       });
 
-      // White sparkle cores
-      [[0.22,0.45],[0.62,0.52],[1.08,0.42],[1.52,0.50],[2.05,0.48],[2.55,0.44],
-      ].forEach(([fx,fy]) => {
-        push(fx,fy, 0.05, [240,235,255], 0.20);
-      });
-
       return list;
     };
 
@@ -198,9 +193,12 @@ const GalaxyCanvas = () => {
         const alpha = b.baseAlpha * osc * fadeIn;
         if (alpha < 0.005) return;
 
+        // Flat-top gradient — colour is nearly uniform across the middle,
+        // only fading at the outer 35% — gives smooth nebula wash, not a dot
         const g = ctx.createRadialGradient(screenX,wy,0, screenX,wy,r);
         g.addColorStop(0,    `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha})`);
-        g.addColorStop(0.45, `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha*0.45})`);
+        g.addColorStop(0.55, `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha * 0.88})`);
+        g.addColorStop(0.78, `rgba(${b.col[0]},${b.col[1]},${b.col[2]},${alpha * 0.40})`);
         g.addColorStop(1,    "rgba(0,0,0,0)");
         ctx.beginPath();
         ctx.arc(screenX, wy, r, 0, Math.PI*2);
